@@ -1,0 +1,3 @@
+[submodule "CppUtil"]
+	path = CppUtil
+	url = git@github.com:rienovie/CppUtil.git

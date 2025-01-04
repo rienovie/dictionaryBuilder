@@ -1,5 +1,8 @@
-#include <iostream>
+
+#include "CppUtil/util.hpp"
 
 int main(int argc, char* argv[] ) {
-	std::cout << "Hello from cMakeTemplate!" << std::endl;
+
+	util::cPrint("cyan","Hello there.");
+
 }

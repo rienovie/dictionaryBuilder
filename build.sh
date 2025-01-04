@@ -3,7 +3,7 @@
 buildDir="build"
 
 # NOTE: make sure to set this
-programExec="cMakeTemplate"
+programExec="dictMaker"
 
 if [ ! -d $buildDir ]; then
 	mkdir $buildDir
@@ -21,7 +21,8 @@ if [ $? -ne 0 ]; then
 fi
 
 if [ $# -gt 0 ] && [ $1 = "run" ]; then
-	echo $'Build complete. Attempting to run $programExec.\n'
+	echo "Build complete. Attempting to run $programExec"
+	echo "--- $programExec ---"
 
 	if [ ! -f $programExec ]; then
 		echo "$programExec was not found in the build directory."
@@ -36,4 +37,3 @@ if [ $# -gt 0 ] && [ $1 = "run" ]; then
 else
 	echo "Build complete. For autorun pass 'run' arg to script."
 fi
-

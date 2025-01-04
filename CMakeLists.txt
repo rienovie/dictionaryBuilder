@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.27)
-project(cMakeTemplate)
+project(dictMaker)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_FLAGS "${CMAKE+CXX_FLAGS} -fsanitize=address -g")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# find_package(somePackage REQUIRED)
+find_package(CURL REQUIRED)
 
-set(SOURCES main.cpp)
+set(SOURCES main.cpp CppUtil/util.cpp)
 
-add_executable(cMakeTemplate ${SOURCES})
+add_executable(dictMaker ${SOURCES})
