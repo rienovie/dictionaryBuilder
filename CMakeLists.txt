@@ -7,6 +7,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(CURL REQUIRED)
 
-set(SOURCES main.cpp CppUtil/util.cpp)
+set(SOURCES src/main.cpp src/data.cpp CppUtil/util.cpp)
 
 add_executable(dictMaker ${SOURCES})
