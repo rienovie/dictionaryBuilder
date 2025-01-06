@@ -16,6 +16,7 @@ public:
 
 	// int is count
 	std::unordered_map<std::string, int> wordList_map;
+	int writeBatchSize = 8;
 
 
 	void
@@ -32,6 +33,9 @@ private:
 	
 	// used for Thread IDs
 	int threadCounter = 0;
+
+	// TODO: verify location
+	std::string dbFile_str = "dict.db";
 
 	std::unordered_set<std::string>
 		completedSites_uset,
@@ -50,6 +54,8 @@ private:
 		newSiteThread(mainData& parent_ref, int tId, std::string site),
 		siteThread_main(),
 		wordThread_main(),
-		joinAllThreads();
+		joinAllThreads(),
+		loadFromDB(),
+		writeToDB();
 
 };

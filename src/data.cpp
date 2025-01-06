@@ -1,9 +1,12 @@
 #include "data.hpp"
 
+#include <cassert>
 #include <string>
 #include <thread>
 #include <unistd.h>
 #include <vector>
+
+#include <sqlite3.h>
 
 #include "../CppUtil/util.hpp"
 
@@ -132,5 +135,138 @@ void mainData::joinAllThreads() {
 
 void mainData::newSiteThread(mainData& parent_ref, int tId, std::string site) {
 	// TODO: working here
+}
+
+void mainData::loadFromDB() {
+	// TODO: extract sqlite open/close to another function
+
+	sqlite3* db;
+	sqlite3_stmt* dbStmt;
+
+	int openDB = sqlite3_open(dbFile_str.c_str(),&db);
+	if(openDB != SQLITE_OK) {
+		util::cPrint("red","Error, db file unable to be opened. SQLite error:",sqlite3_errmsg(db));
+		// want to make sure crashes
+		// TODO: try using assert maybe?
+		throw;
+	}
+
+	openDB = sqlite3_prepare_v2(db,"SELECT * FROM Main;",-1,&dbStmt,nullptr);
+	if(openDB != SQLITE_OK) {
+		util::cPrint("red","Error, unable to Select * from Main. SQLite error:",sqlite3_errmsg(db));
+		sqlite3_finalize(dbStmt);
+		sqlite3_close(db);
+		throw;
+	}
+
+	wordList_map.clear();
+	std::string sWord = "";
+
+	while((openDB = sqlite3_step(dbStmt)) == SQLITE_ROW) {
+		sWord = reinterpret_cast<const char*>(sqlite3_column_text(dbStmt, 0));
+		wordList_map[sWord] = sqlite3_column_int(dbStmt,1);
+	}
+
+	sqlite3_finalize(dbStmt);
+	sqlite3_close(db);
+}
+
+// assumes the db file data has already been extracted so the count will be overwritten not added
+void mainData::writeToDB() {
+	sqlite3* db;
+	sqlite3_stmt* dbStmt;
+
+	int openDB = sqlite3_open(dbFile_str.c_str(),&db);
+	if(openDB != SQLITE_OK) {
+		util::cPrint("red","Error, db file unable to be opened. SQLite error:",sqlite3_errmsg(db));
+		// want to make sure crashes
+		// TODO: try using assert maybe?
+		throw;
+	}
+
+	// I feel like batching is better so I'll do that for now, but  TODO: test this
+	std::vector<std::pair<std::string,int>> wordBatch_vec(writeBatchSize);
+	std::string sStmtBuild = "";
+	for(auto& i : wordList_map) {
+		wordBatch_vec.push_back(i);
+
+		if(wordBatch_vec.size() >= writeBatchSize) {
+			// build statement
+			sStmtBuild = "(INSERT INTO Main (word,count) VALUES ";
+			for(int i = wordBatch_vec.size() - 1; i > -1; --i) {
+				sStmtBuild.append(
+					"(" +
+					wordBatch_vec.at(i).first +
+					"," +
+					std::to_string(wordBatch_vec.at(i).second) +
+					") ");
+				wordBatch_vec.pop_back();
+			}
+			sStmtBuild.append("\nON CONFLICT(word) DO UPDATE SET count = excluded.count;)");
+
+			openDB = sqlite3_prepare_v2(db,sStmtBuild.c_str(),-1,&dbStmt,nullptr);
+			if(openDB != SQLITE_OK) {
+				util::cPrint("red","Error, unable to Select * from Main. SQLite error:",sqlite3_errmsg(db));
+				sqlite3_finalize(dbStmt);
+				sqlite3_close(db);
+				throw;
+			}
+
+			openDB = sqlite3_step(dbStmt);
+			if(openDB != SQLITE_DONE) {
+				util::cPrint("red","Error executing batch insert. SQLite error:",sqlite3_errmsg(db));
+				sqlite3_finalize(dbStmt);
+				sqlite3_close(db);
+				throw;
+			}
+
+			sqlite3_finalize(dbStmt);
+			dbStmt = nullptr;
+
+			// just to make sure
+			wordBatch_vec.clear();
+
+		}
+	}
+
+	if(wordBatch_vec.size() > 0) {
+		// TODO: was lazy and just copy pasta make better
+		sStmtBuild = "(INSERT INTO Main (word,count) VALUES ";
+		for(int i = wordBatch_vec.size() - 1; i > -1; --i) {
+			sStmtBuild.append(
+				"(" +
+				wordBatch_vec.at(i).first +
+				std::to_string(wordBatch_vec.at(i).second) +				"," +
+				") ");
+			wordBatch_vec.pop_back();
+		}
+		sStmtBuild.append("\nON CONFLICT(word) DO UPDATE SET count = excluded.count;)");
+
+		openDB = sqlite3_prepare_v2(db,sStmtBuild.c_str(),-1,&dbStmt,nullptr);
+		if(openDB != SQLITE_OK) {
+			util::cPrint("red","Error, unable to Select * from Main. SQLite error:",sqlite3_errmsg(db));
+			sqlite3_finalize(dbStmt);
+			sqlite3_close(db);
+			throw;
+		}
+
+		openDB = sqlite3_step(dbStmt);
+		if(openDB != SQLITE_DONE) {
+			util::cPrint("red","Error executing batch insert. SQLite error:",sqlite3_errmsg(db));
+			sqlite3_finalize(dbStmt);
+			sqlite3_close(db);
+			throw;
+		}
+
+		sqlite3_finalize(dbStmt);
+		dbStmt = nullptr;
+
+		// just to make sure
+		wordBatch_vec.clear();
+
+	}
+
+	sqlite3_close(db);
+
 }
 
