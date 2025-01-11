@@ -2,9 +2,13 @@
 
 #include <cassert>
 #include <cstddef>
+#include <queue>
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <sqlite3.h>
@@ -13,6 +17,19 @@
 #include "../CppUtil/util.hpp"
 
 static bool instanceExists = false;
+
+bool mainData::stopCalled = false;
+std::unordered_map<std::string, int> mainData::wordList_map = {};
+std::unordered_set<std::string>
+	mainData::completedSites_uset = {},
+	mainData::curSites_uset = {};
+std::queue<std::string>
+	mainData::site_que = {},
+	mainData::word_que = {},
+	mainData::wordLock_que = {},
+	mainData::siteLock_que = {};
+std::vector<std::pair<bool,int>> mainData::currentThreads_vec = {};
+	
 
 // Constructor
 mainData::mainData(int maxThreads_input, std::vector<std::string> initialWork_vecStr) {
@@ -24,6 +41,10 @@ mainData::mainData(int maxThreads_input, std::vector<std::string> initialWork_ve
 	instanceExists = true;
 	maxThreads_int = maxThreads_input;
 	currentThreads_vec.reserve(maxThreads_int);
+
+	for(int i = 0; i < maxThreads_int; ++i) {
+		currentThreads_vec.push_back(std::make_pair(true, 0));
+	}
 
 	loadFromDB();
 
@@ -44,7 +65,8 @@ mainData::mainData(int maxThreads_input, std::vector<std::string> initialWork_ve
 
 // Destructor
 mainData::~mainData() {
-	stopCalled = true;
+	util::cPrint("blue","Finishing work...");
+
 	joinAllThreads();
 
 	writeToDB();
@@ -52,6 +74,8 @@ mainData::~mainData() {
 	curl_global_cleanup();
 
 	instanceExists = false;
+
+	util::cPrint("green","Work finished.");
 }
 
 void mainData::possibleSite(std::string site_str) {
@@ -85,8 +109,28 @@ void mainData::completedWork(int tId) {
 	}
 }
 
+void mainData::stopFunc() {
+
+	if(WTStopped && STStopped) {
+		stopCalled = true;
+		return;
+	}
+
+	sleep(1);
+}
+
 void mainData::siteThread_main() {
+	int iStopCount = 0;
+
+// recursive calls go on the stack but this avoids it
+lbl_siteThreadStart:
 	if(stopCalled) {
+		STStopped = true;
+		return;
+	}
+
+	if(iStopCount > checkCount) {
+		STStopped = true;
 		return;
 	}
 
@@ -95,6 +139,7 @@ void mainData::siteThread_main() {
 		if(i.first && site_que.size() > 0
 		&& (!completedSites_uset.contains(site_que.front()))
 		&& (!curSites_uset.contains(site_que.front()))) {
+			iStopCount = 0;
 			i.first = false;
 			++threadCounter;
 			i.second = threadCounter;
@@ -109,17 +154,30 @@ void mainData::siteThread_main() {
 		siteLock_que.pop();
 	}
 
-	siteThread_main();
+	sleep(1);
+	++iStopCount;
+	goto lbl_siteThreadStart;
 
 }
 
 void mainData::wordThread_main() {
+	int iStopCounter = 0;
+
+// recursive calls go on the stack but this avoids it
+lbl_wordThreadStart:
 	if(stopCalled) {
+		WTStopped = true;
 		return;
 	}
-	wordLock = true;
 
+	if(iStopCounter > checkCount) {
+		WTStopped = true;
+		return;
+	}
+
+	wordLock = true;
 	while(word_que.size() > 0) {
+		iStopCounter = 0;
 		if(wordList_map.contains(word_que.front())) {
 			wordList_map.at(word_que.front()) += 1;
 		} else {
@@ -135,12 +193,19 @@ void mainData::wordThread_main() {
 		wordLock_que.pop();
 	}
 
-	wordThread_main();
+	// adds to stack and causes overflow, so goto
+	// wordThread_main();
+	sleep(1);
+	++iStopCounter;
+	goto lbl_wordThreadStart;
 }
 
 void mainData::joinAllThreads() {
 	if(site_thread.joinable()) {
 		site_thread.join();
+	}
+	if(word_thread.joinable()) {
+		word_thread.join();
 	}
 }
 
@@ -150,24 +215,25 @@ size_t mainData::curlWriteFunc(char* ptr, size_t size, size_t nmemb, std::string
 	return dataSize;
 }
 
+// TODO: working on this function here
 void mainData::parseSite(std::string& page_str) {
 	util::qPrint(page_str);
 }
 
 void mainData::newSiteThread(mainData& parent_ref, int tId, std::string site) {
-	if(completedSites_uset.contains(site) || curSites_uset.contains(site)) {
+	if(parent_ref.completedSites_uset.contains(site) || parent_ref.curSites_uset.contains(site)) {
 		return;
 	}
 
-	curSites_uset.emplace(site);
+	parent_ref.curSites_uset.emplace(site);
 	
 	CURL* curl = curl_easy_init();
 	
 	if(!curl) {
 		util::cPrint("red","ERROR! Failed to create curl easy init on thread",tId,"with site",site);
 
-		curSites_uset.erase(site);
-		completedSites_uset.emplace(site);
+		parent_ref.curSites_uset.erase(site);
+		parent_ref.completedSites_uset.emplace(site);
 
 		parent_ref.completedWork(tId);
 		return;
@@ -183,16 +249,17 @@ void mainData::newSiteThread(mainData& parent_ref, int tId, std::string site) {
 	if(res != CURLE_OK) {
 		util::cPrint("red","ERROR! Failed to curl easy perform on thread",tId,"with site",site);
 	
-		curSites_uset.erase(site);
-		completedSites_uset.emplace(site);
+		parent_ref.curSites_uset.erase(site);
+		parent_ref.completedSites_uset.emplace(site);
 
 		parent_ref.completedWork(tId);
 	}
 
 	parseSite(page_str);
 
-	curSites_uset.erase(site);
-	completedSites_uset.emplace(site);
+	parent_ref.curSites_uset.erase(site);
+	parent_ref.completedSites_uset.emplace(site);
+	
 
 	curl_easy_cleanup(curl);
 
@@ -246,7 +313,7 @@ void mainData::writeToDB() {
 	}
 
 	// I feel like batching is better so I'll do that for now, but  TODO: test this
-	std::vector<std::pair<std::string,int>> wordBatch_vec(writeBatchSize);
+	std::vector<std::pair<std::string,int>> wordBatch_vec;
 	std::string sStmtBuild = "";
 	for(auto& i : wordList_map) {
 		wordBatch_vec.push_back(i);
@@ -263,11 +330,11 @@ void mainData::writeToDB() {
 					") ");
 				wordBatch_vec.pop_back();
 			}
-			sStmtBuild.append("\nON CONFLICT(word) DO UPDATE SET count = excluded.count;)");
+			sStmtBuild.append("ON CONFLICT(word) DO UPDATE SET count = excluded.count;)");
 
 			openDB = sqlite3_prepare_v2(db,sStmtBuild.c_str(),-1,&dbStmt,nullptr);
 			if(openDB != SQLITE_OK) {
-				util::cPrint("red","Error, unable to Select * from Main. SQLite error:",sqlite3_errmsg(db));
+				util::cPrint("red","Error, unable to INSERT INTO Main (word,count) VALUES. SQLite error:",sqlite3_errmsg(db));
 				sqlite3_finalize(dbStmt);
 				sqlite3_close(db);
 				throw;
@@ -301,11 +368,11 @@ void mainData::writeToDB() {
 				") ");
 			wordBatch_vec.pop_back();
 		}
-		sStmtBuild.append("\nON CONFLICT(word) DO UPDATE SET count = excluded.count;)");
+		sStmtBuild.append("ON CONFLICT(word) DO UPDATE SET count = excluded.count;)");
 
 		openDB = sqlite3_prepare_v2(db,sStmtBuild.c_str(),-1,&dbStmt,nullptr);
 		if(openDB != SQLITE_OK) {
-			util::cPrint("red","Error, unable to Select * from Main. SQLite error:",sqlite3_errmsg(db));
+			util::cPrint("red","Error, unable to INSERT INTO Main (word,count) VALUES. SQLite error:",sqlite3_errmsg(db));
 			sqlite3_finalize(dbStmt);
 			sqlite3_close(db);
 			throw;

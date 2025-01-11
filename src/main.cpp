@@ -2,16 +2,21 @@
 #include "../CppUtil/util.hpp"
 #include "data.hpp"
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 std::vector<std::string> initialSites = {
-	"wikipedia.com"
+	"https://en.wikipedia.org/wiki/Most_common_words_in_English"
 };
 
 int main(int argc, char* argv[] ) {
 
-	util::cPrint("red","Hello there.");
-	auto MD = mainData(2,initialSites);
-	util::cPrint("blue","Finished.");
+	util::cPrint("blue","Dictionary Builder.");
+	auto MD = mainData(8,initialSites);
+	
+	while(!MD.stopCalled) {
+		MD.stopFunc();
+	}
+
 
 }

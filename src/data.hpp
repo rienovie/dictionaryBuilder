@@ -15,9 +15,11 @@ public:
 
 
 	// int is count
-	std::unordered_map<std::string, int> wordList_map;
+	static std::unordered_map<std::string, int> wordList_map;
 	int writeBatchSize = 8;
+	static bool stopCalled;
 
+	void stopFunc();
 
 	void
 		possibleSite(std::string site_str),
@@ -26,7 +28,8 @@ public:
 
 private:
 	bool
-		stopCalled = false,
+		WTStopped = false,
+		STStopped = false,
 		siteLock = false,
 		wordLock = false;
 	int maxThreads_int = 4;
@@ -34,19 +37,23 @@ private:
 	// used for Thread IDs
 	int threadCounter = 0;
 
+	// used for stop check counters
+	int checkCount = 1;
+
 	// TODO: verify location
 	std::string dbFile_str = "dict.db";
 
-	std::unordered_set<std::string>
+	static std::unordered_set<std::string>
 		completedSites_uset,
 		curSites_uset;
 
-	std::queue<std::string> site_que, word_que, wordLock_que, siteLock_que;
+	static std::queue<std::string> site_que, word_que, wordLock_que, siteLock_que;
 	
 	//bool says if available
-	std::vector<std::pair<bool,int>> currentThreads_vec;
+	static std::vector<std::pair<bool,int>> currentThreads_vec;
 
 	std::thread
+		stop_thread,
 		site_thread,
 		word_thread;
 
