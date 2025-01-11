@@ -14,4 +14,4 @@ add_executable(dictMaker ${SOURCES})
 
 include_directories(${SQLite3_INCLUDE_DIRS})
 
-target_link_libraries(dictMaker ${SQLite3_LIBRARIES})
+target_link_libraries(dictMaker ${SQLite3_LIBRARIES} ${CURL_LIBRARIES})

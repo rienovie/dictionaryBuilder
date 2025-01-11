@@ -51,11 +51,14 @@ private:
 		word_thread;
 
 	void
+		parseSite(std::string& page_str),
 		newSiteThread(mainData& parent_ref, int tId, std::string site),
 		siteThread_main(),
 		wordThread_main(),
 		joinAllThreads(),
 		loadFromDB(),
 		writeToDB();
+
+	static size_t curlWriteFunc(char* ptr, size_t size, size_t nmemb, std::string* data);
 
 };

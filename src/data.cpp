@@ -1,12 +1,14 @@
 #include "data.hpp"
 
 #include <cassert>
+#include <cstddef>
 #include <string>
 #include <thread>
 #include <unistd.h>
 #include <vector>
 
 #include <sqlite3.h>
+#include <curl/curl.h>
 
 #include "../CppUtil/util.hpp"
 
@@ -23,7 +25,13 @@ mainData::mainData(int maxThreads_input, std::vector<std::string> initialWork_ve
 	maxThreads_int = maxThreads_input;
 	currentThreads_vec.reserve(maxThreads_int);
 
-	// TODO: load from DB
+	loadFromDB();
+
+	auto curlInitResult = curl_global_init(CURL_GLOBAL_DEFAULT);
+	if(curlInitResult != CURLE_OK) {
+		util::cPrint("red","ERROR! Curl global init failed:",curl_easy_strerror(curlInitResult));
+		throw;
+	}
 
 	for(auto& i : initialWork_vecStr) {
 		possibleSite(i);
@@ -38,9 +46,12 @@ mainData::mainData(int maxThreads_input, std::vector<std::string> initialWork_ve
 mainData::~mainData() {
 	stopCalled = true;
 	joinAllThreads();
-	instanceExists = false;
 
-	// TODO: write to DB
+	writeToDB();
+	
+	curl_global_cleanup();
+
+	instanceExists = false;
 }
 
 void mainData::possibleSite(std::string site_str) {
@@ -133,8 +144,58 @@ void mainData::joinAllThreads() {
 	}
 }
 
+size_t mainData::curlWriteFunc(char* ptr, size_t size, size_t nmemb, std::string* data) {
+	size_t dataSize = size * nmemb;
+	data->append(ptr,dataSize);
+	return dataSize;
+}
+
+void mainData::parseSite(std::string& page_str) {
+	util::qPrint(page_str);
+}
+
 void mainData::newSiteThread(mainData& parent_ref, int tId, std::string site) {
-	// TODO: working here
+	if(completedSites_uset.contains(site) || curSites_uset.contains(site)) {
+		return;
+	}
+
+	curSites_uset.emplace(site);
+	
+	CURL* curl = curl_easy_init();
+	
+	if(!curl) {
+		util::cPrint("red","ERROR! Failed to create curl easy init on thread",tId,"with site",site);
+
+		curSites_uset.erase(site);
+		completedSites_uset.emplace(site);
+
+		parent_ref.completedWork(tId);
+		return;
+	}
+
+	std::string page_str = "";
+
+	curl_easy_setopt(curl, CURLOPT_URL, site.c_str());
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteFunc);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &page_str);
+
+	CURLcode res = curl_easy_perform(curl);
+	if(res != CURLE_OK) {
+		util::cPrint("red","ERROR! Failed to curl easy perform on thread",tId,"with site",site);
+	
+		curSites_uset.erase(site);
+		completedSites_uset.emplace(site);
+
+		parent_ref.completedWork(tId);
+	}
+
+	parseSite(page_str);
+
+	curSites_uset.erase(site);
+	completedSites_uset.emplace(site);
+
+	curl_easy_cleanup(curl);
+
 }
 
 void mainData::loadFromDB() {
@@ -230,7 +291,7 @@ void mainData::writeToDB() {
 	}
 
 	if(wordBatch_vec.size() > 0) {
-		// TODO: was lazy and just copy pasta make better
+		// TODO: was lazy and just copy pasta / make better later
 		sStmtBuild = "(INSERT INTO Main (word,count) VALUES ";
 		for(int i = wordBatch_vec.size() - 1; i > -1; --i) {
 			sStmtBuild.append(
