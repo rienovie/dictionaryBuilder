@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <queue>
 #include <string>
+#include <sys/types.h>
 #include <thread>
 #include <unistd.h>
 #include <unordered_map>
@@ -24,15 +25,16 @@ std::unordered_set<std::string>
 	mainData::completedSites_uset = {},
 	mainData::curSites_uset = {};
 std::queue<std::string>
-	mainData::site_que = {},
 	mainData::word_que = {},
-	mainData::wordLock_que = {},
-	mainData::siteLock_que = {};
-std::vector<std::pair<bool,int>> mainData::currentThreads_vec = {};
-	
+	mainData::wordLock_que = {};
+std::queue<std::pair<std::string,int>>
+	mainData::siteQ = {},
+	mainData::siteLockQ = {};
+std::vector<std::pair<bool,std::thread>> mainData::currentThreads_vec = {};
+std::unordered_set<std::thread::id> mainData::thread_set = {};
 
 // Constructor
-mainData::mainData(int maxThreads_input, std::vector<std::string> initialWork_vecStr) {
+mainData::mainData(int maxThreads_input, int maxDepth_input, std::vector<std::string> initialWork_vecStr) {
 	if(instanceExists) {
 		util::cPrint("red","ERROR! Attempted to create mainData instance when one already exists.");
 		return;
@@ -40,11 +42,9 @@ mainData::mainData(int maxThreads_input, std::vector<std::string> initialWork_ve
 	
 	instanceExists = true;
 	maxThreads_int = maxThreads_input;
-	currentThreads_vec.reserve(maxThreads_int);
+	maxDepth = maxDepth_input;
 
-	for(int i = 0; i < maxThreads_int; ++i) {
-		currentThreads_vec.push_back(std::make_pair(true, 0));
-	}
+	currentThreads_vec.reserve(maxThreads_int);
 
 	loadFromDB();
 
@@ -55,7 +55,7 @@ mainData::mainData(int maxThreads_input, std::vector<std::string> initialWork_ve
 	}
 
 	for(auto& i : initialWork_vecStr) {
-		possibleSite(i);
+		possibleSite(i,0);
 	}
 
 	site_thread = std::thread(&mainData::siteThread_main, this);
@@ -78,12 +78,21 @@ mainData::~mainData() {
 	util::cPrint("green","Work finished.");
 }
 
-void mainData::possibleSite(std::string site_str) {
-	if(siteLock) {
-		siteLock_que.push(site_str);
-	} else {
-		site_que.push(site_str);
+void mainData::possibleSite(std::string site_str, int depth_int) {
+	if(depth_int > mainData::maxDepth) {
+		return;
 	}
+	
+	// probably a valid site
+	if(site_str.length() > 8 && site_str.substr(0,8) == "https://" && (!util::containsAny(site_str, ";#%"))) {
+		util::qPrint("Possible site called for:",site_str);
+		if(siteLock) {
+			siteLockQ.push(std::pair(site_str,depth_int));
+		} else {
+			siteQ.push(std::pair(site_str,depth_int));
+		}
+	}
+
 }
 
 void mainData::addToWordList(std::string word_str) {
@@ -95,22 +104,8 @@ void mainData::addToWordList(std::string word_str) {
 	}
 }
 
-void mainData::completedWork(int tId) {
-	for(auto& i : currentThreads_vec) {
-		if(i.second == tId) {
-			i.first = true;
-			return;
-		}
-	}
-
-	util::cPrint("red","Attempted to complete work on threadID",tId,"but thread not found.\nPrinting current thread vector:");
-
-	for(auto& i : currentThreads_vec) {
-		util::cPrint("yellow","Thread ID:",i.second,"/ Available:",i.first);
-	}
-}
-
 void mainData::stopCheck() {
+// recursive calls go on the stack but this avoids it
 lblStopCheckStart:
 	if(WTStopped && STStopped) {
 		stopCalled = true;
@@ -134,24 +129,22 @@ lbl_siteThreadStart:
 		return;
 	}
 
-	siteLock = true;
-	for(auto& i : currentThreads_vec) {
-		if(i.first && site_que.size() > 0
-		&& (!completedSites_uset.contains(site_que.front()))
-		&& (!curSites_uset.contains(site_que.front()))) {
+	if(thread_set.size() < maxThreads_int) {
+		siteLock = true;
+		if(siteQ.size() > 0
+		&& (!completedSites_uset.contains(siteQ.front().first))
+		&& (!curSites_uset.contains(siteQ.front().first))) {
 			iStopCount = 0;
-			i.first = false;
-			++threadCounter;
-			i.second = threadCounter;
-			newSiteThread(*this, threadCounter, site_que.front());
-			site_que.pop();
+			auto newThread = std::thread(&mainData::newSiteThread,*this,siteQ.front().first,siteQ.front().second);
+			thread_set.emplace(newThread.get_id());
+			siteQ.pop();
 		}
+		siteLock = false;
 	}
-	siteLock = false;
 
-	while(siteLock_que.size() > 0) {
-		site_que.push(siteLock_que.front());
-		siteLock_que.pop();
+	while(siteLockQ.size() > 0) {
+		siteLockQ.push(siteLockQ.front());
+		siteLockQ.pop();
 	}
 
 	sleep(1);
@@ -179,7 +172,7 @@ lbl_wordThreadStart:
 	while(word_que.size() > 0) {
 		iStopCounter = 0;
 		util::unordered_mapIncrement(wordList_map, word_que.front());
-		util::qPrint(word_que.front());
+		// util::qPrint(word_que.front());
 		word_que.pop();
 	}
 
@@ -213,14 +206,14 @@ size_t mainData::curlWriteFunc(char* ptr, size_t size, size_t nmemb, std::string
 	return dataSize;
 }
 
-// TODO: working on this function here
-void mainData::parseSite(std::string& page_str) {
+void mainData::parseSite(std::string& page_str, int& depth_int) {
 	std::unordered_map<std::string,int> mElementCounter;
 	std::string sBuild = "";
 	bool
 		insideAngleBrackets = false,
 		insideBody = false,
 		ignoreCurrent = false,
+		workingHref = false,
 		determingElement = true;
 	std::unordered_set<std::string> elementsToIgnore = {
 		"footer",
@@ -261,8 +254,25 @@ void mainData::parseSite(std::string& page_str) {
 				} else {
 					sBuild.push_back(c);
 				}
+			} else if(workingHref) {
+				// TODO: verify this section works
+				if(c == ' ' || c == '>') {
+					possibleSite(sBuild,depth_int + 1);
+					sBuild.clear();
+					workingHref = false;
+				} else if(c != '"') {
+					sBuild.push_back(c);
+				}
 			} else if (c == '>') {
 				insideAngleBrackets = false;
+				sBuild.clear();
+			} else if (c == '=' && sBuild == "href"){
+				workingHref = true;
+				sBuild.clear();
+			} else if(c == ' ') {
+				sBuild.clear();
+			} else {
+				sBuild.push_back(c);
 			}
 		} else if(c == '<') {
 			insideAngleBrackets = true;
@@ -292,7 +302,7 @@ void mainData::parseSite(std::string& page_str) {
 
 }
 
-void mainData::newSiteThread(mainData& parent_ref, int tId, std::string site) {
+void mainData::newSiteThread(mainData& parent_ref, std::string site, int depth_int) {
 	if(parent_ref.completedSites_uset.contains(site) || parent_ref.curSites_uset.contains(site)) {
 		return;
 	}
@@ -302,12 +312,12 @@ void mainData::newSiteThread(mainData& parent_ref, int tId, std::string site) {
 	CURL* curl = curl_easy_init();
 	
 	if(!curl) {
-		util::cPrint("red","ERROR! Failed to create curl easy init on thread",tId,"with site",site);
+		util::cPrint("red","ERROR! Failed to create curl easy init on thread",std::this_thread::get_id(),"with site",site);
 
 		parent_ref.curSites_uset.erase(site);
 		parent_ref.completedSites_uset.emplace(site);
+		parent_ref.thread_set.erase(std::this_thread::get_id());
 
-		parent_ref.completedWork(tId);
 		return;
 	}
 
@@ -319,18 +329,20 @@ void mainData::newSiteThread(mainData& parent_ref, int tId, std::string site) {
 
 	CURLcode res = curl_easy_perform(curl);
 	if(res != CURLE_OK) {
-		util::cPrint("red","ERROR! Failed to curl easy perform on thread",tId,"with site",site);
+		util::cPrint("red","ERROR! Failed to curl easy perform on thread",std::this_thread::get_id(),"with site",site);
 	
 		parent_ref.curSites_uset.erase(site);
 		parent_ref.completedSites_uset.emplace(site);
-
-		parent_ref.completedWork(tId);
+		parent_ref.thread_set.erase(std::this_thread::get_id());
 	}
 
-	parseSite(page_str);
+	util::cPrint("cyan","Attempting to parse site:",site," with a depth value of:",depth_int);
+	parseSite(page_str,depth_int);
+	util::cPrint("green","Finished parsing site:",site);
 
 	parent_ref.curSites_uset.erase(site);
 	parent_ref.completedSites_uset.emplace(site);
+	parent_ref.thread_set.erase(std::this_thread::get_id());
 	
 
 	curl_easy_cleanup(curl);
@@ -353,10 +365,25 @@ void mainData::loadFromDB() {
 
 	openDB = sqlite3_prepare_v2(db,"SELECT * FROM Main;",-1,&dbStmt,nullptr);
 	if(openDB != SQLITE_OK) {
-		util::cPrint("red","Error, unable to Select * from Main. SQLite error:",sqlite3_errmsg(db));
+		openDB = sqlite3_prepare_v2(db,
+							  "CREATE TABLE Main ('word' TEXT UNIQUE,'count' INTEGER, PRIMARY KEY('word'))",
+							  -1, &dbStmt, nullptr);
+		if(openDB != SQLITE_OK) {
+			util::cPrint("red","Error, unable to Select or Create table Main. SQLite error:",sqlite3_errmsg(db));
+			sqlite3_finalize(dbStmt);
+			sqlite3_close(db);
+			throw;
+		}
+		sqlite3_step(dbStmt);
 		sqlite3_finalize(dbStmt);
-		sqlite3_close(db);
-		throw;
+
+		openDB = sqlite3_prepare_v2(db,"SELECT * FROM Main;",-1,&dbStmt,nullptr);
+		if(openDB != SQLITE_OK) {
+			util::cPrint("red","Error, unable to Select * From Main after creation. SQLite error:",sqlite3_errmsg(db));
+			sqlite3_finalize(dbStmt);
+			sqlite3_close(db);
+			throw;
+		}
 	}
 
 	wordList_map.clear();

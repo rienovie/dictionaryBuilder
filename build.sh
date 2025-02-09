@@ -7,10 +7,10 @@ programExec="dictMaker"
 
 if [ ! -d $buildDir ]; then
 	mkdir $buildDir
-	cd $buildDir
+	cd $buildDir || exit 1
 	cmake ..
 else
-	cd $buildDir
+	cd $buildDir || exit 1
 fi
 
 cmake --build .
