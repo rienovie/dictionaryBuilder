@@ -87,6 +87,7 @@ void mainData::possibleSite(std::string site_str) {
 }
 
 void mainData::addToWordList(std::string word_str) {
+	util::toLowercase(word_str);
 	if(wordLock) {
 		wordLock_que.push(word_str);
 	} else {
@@ -109,14 +110,13 @@ void mainData::completedWork(int tId) {
 	}
 }
 
-void mainData::stopFunc() {
-
+void mainData::stopCheck() {
+lblStopCheckStart:
 	if(WTStopped && STStopped) {
 		stopCalled = true;
 		return;
 	}
-
-	sleep(1);
+	goto lblStopCheckStart;
 }
 
 void mainData::siteThread_main() {
@@ -178,17 +178,15 @@ lbl_wordThreadStart:
 	wordLock = true;
 	while(word_que.size() > 0) {
 		iStopCounter = 0;
-		if(wordList_map.contains(word_que.front())) {
-			wordList_map.at(word_que.front()) += 1;
-		} else {
-			wordList_map[word_que.front()] = 1;
-		}
+		util::unordered_mapIncrement(wordList_map, word_que.front());
+		util::qPrint(word_que.front());
 		word_que.pop();
 	}
 
 	wordLock = false;
 	
 	while(wordLock_que.size() > 0) {
+		iStopCounter = 0;
 		word_que.push(wordLock_que.front());
 		wordLock_que.pop();
 	}
@@ -217,7 +215,81 @@ size_t mainData::curlWriteFunc(char* ptr, size_t size, size_t nmemb, std::string
 
 // TODO: working on this function here
 void mainData::parseSite(std::string& page_str) {
-	util::qPrint(page_str);
+	std::unordered_map<std::string,int> mElementCounter;
+	std::string sBuild = "";
+	bool
+		insideAngleBrackets = false,
+		insideBody = false,
+		ignoreCurrent = false,
+		determingElement = true;
+	std::unordered_set<std::string> elementsToIgnore = {
+		"footer",
+		"img",
+		"script",
+		"head",
+		"input",
+		"!--",
+		"title",
+		"meta"
+	};
+
+	for(char& c : page_str) {
+		if(insideAngleBrackets) {
+			if(determingElement) {
+				if(c == ' ' | c == '>' | c == '\n') {
+					determingElement = false;
+					if(c == '>') insideAngleBrackets = false;
+					if(sBuild[0] == '/') {
+						ignoreCurrent = false;
+						sBuild = sBuild.substr(1);
+						if(sBuild == "body") {
+							insideBody = false;
+							sBuild.clear();
+							continue;
+						}
+						util::unordered_mapIncrement(mElementCounter, sBuild,-1);
+					} else if(util::contains(elementsToIgnore,sBuild)) {
+						sBuild.clear();
+						ignoreCurrent = true;
+						continue;
+					} else {
+						util::unordered_mapIncrement(mElementCounter, sBuild);
+					}
+					if(sBuild == "body") insideBody = true;
+					// util::qPrint(sBuild);
+					sBuild.clear();
+				} else {
+					sBuild.push_back(c);
+				}
+			} else if (c == '>') {
+				insideAngleBrackets = false;
+			}
+		} else if(c == '<') {
+			insideAngleBrackets = true;
+			determingElement = true;
+			ignoreCurrent = false;
+			if(sBuild.length() > 0) {
+				if(util::onlyContains(sBuild,"'",true)
+				&& (sBuild.length() > 1)
+				&& (!util::onlyContains(sBuild,"ABCDEFGHIJKLMNOPQRSTUVWXYZ"))) {
+					addToWordList(sBuild);
+				}
+				sBuild.clear();
+			}
+		} else if (ignoreCurrent) {
+			continue;
+		} else if(c == ' ') {
+			if(sBuild.length() > 0) {
+				if(util::onlyContains(sBuild,"",true)) {
+					addToWordList(sBuild);
+				}
+				sBuild.clear();
+			}
+		} else {
+			sBuild.push_back(c);
+		}
+	}
+
 }
 
 void mainData::newSiteThread(mainData& parent_ref, int tId, std::string site) {
@@ -320,21 +392,25 @@ void mainData::writeToDB() {
 
 		if(wordBatch_vec.size() >= writeBatchSize) {
 			// build statement
-			sStmtBuild = "(INSERT INTO Main (word,count) VALUES ";
+			sStmtBuild = "INSERT OR REPLACE INTO Main (word,count) VALUES ";
 			for(int i = wordBatch_vec.size() - 1; i > -1; --i) {
 				sStmtBuild.append(
-					"(" +
+					"('" +
 					wordBatch_vec.at(i).first +
-					"," +
+					"'," +
 					std::to_string(wordBatch_vec.at(i).second) +
-					") ");
+					")");
+				if(i == 0) {
+					sStmtBuild.append(";");
+				} else {
+					sStmtBuild.append(", ");
+				}
 				wordBatch_vec.pop_back();
 			}
-			sStmtBuild.append("ON CONFLICT(word) DO UPDATE SET count = excluded.count;)");
 
 			openDB = sqlite3_prepare_v2(db,sStmtBuild.c_str(),-1,&dbStmt,nullptr);
 			if(openDB != SQLITE_OK) {
-				util::cPrint("red","Error, unable to INSERT INTO Main (word,count) VALUES. SQLite error:",sqlite3_errmsg(db));
+				util::cPrint("red","Error, unable to INSERT OR REPLACE INTO Main (word,count) VALUES.\n\nSQLite error:",sqlite3_errmsg(db),"\n\nSQLite stmt:",sStmtBuild);
 				sqlite3_finalize(dbStmt);
 				sqlite3_close(db);
 				throw;
@@ -359,20 +435,25 @@ void mainData::writeToDB() {
 
 	if(wordBatch_vec.size() > 0) {
 		// TODO: was lazy and just copy pasta / make better later
-		sStmtBuild = "(INSERT INTO Main (word,count) VALUES ";
+		sStmtBuild = "INSERT OR REPLACE INTO Main (word,count) VALUES ";
 		for(int i = wordBatch_vec.size() - 1; i > -1; --i) {
-			sStmtBuild.append(
-				"(" +
-				wordBatch_vec.at(i).first +
-				std::to_string(wordBatch_vec.at(i).second) +				"," +
-				") ");
-			wordBatch_vec.pop_back();
-		}
-		sStmtBuild.append("ON CONFLICT(word) DO UPDATE SET count = excluded.count;)");
+				sStmtBuild.append(
+					"('" +
+					wordBatch_vec.at(i).first +
+					"'," +
+					std::to_string(wordBatch_vec.at(i).second) +
+					")");
+				if(i == 0) {
+					sStmtBuild.append(";");
+				} else {
+					sStmtBuild.append(", ");
+				}
+				wordBatch_vec.pop_back();
+			}
 
 		openDB = sqlite3_prepare_v2(db,sStmtBuild.c_str(),-1,&dbStmt,nullptr);
 		if(openDB != SQLITE_OK) {
-			util::cPrint("red","Error, unable to INSERT INTO Main (word,count) VALUES. SQLite error:",sqlite3_errmsg(db));
+			util::cPrint("red","Error, unable to INSERT OR REPLACE INTO Main (word,count) VALUES.\n\nSQLite error:",sqlite3_errmsg(db),"\n\nSQLite stmt:",sStmtBuild);
 			sqlite3_finalize(dbStmt);
 			sqlite3_close(db);
 			throw;

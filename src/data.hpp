@@ -19,7 +19,7 @@ public:
 	int writeBatchSize = 8;
 	static bool stopCalled;
 
-	void stopFunc();
+	void stopCheck();
 
 	void
 		possibleSite(std::string site_str),

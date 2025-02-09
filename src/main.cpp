@@ -15,7 +15,7 @@ int main(int argc, char* argv[] ) {
 	auto MD = mainData(8,initialSites);
 	
 	while(!MD.stopCalled) {
-		MD.stopFunc();
+		MD.stopCheck();
 	}
 
 
