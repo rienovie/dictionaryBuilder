@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <mutex>
 #include <queue>
 #include <string>
 #include <sys/types.h>
@@ -24,14 +25,8 @@ std::unordered_map<std::string, int> mainData::wordList_map = {};
 std::unordered_set<std::string>
 	mainData::completedSites_uset = {},
 	mainData::curSites_uset = {};
-std::queue<std::string>
-	mainData::word_que = {},
-	mainData::wordLock_que = {};
-std::queue<std::pair<std::string,int>>
-	mainData::siteQ = {},
-	mainData::siteLockQ = {};
-std::vector<std::pair<bool,std::thread>> mainData::currentThreads_vec = {};
-std::unordered_set<std::thread::id> mainData::thread_set = {};
+std::queue<std::string> mainData::wordQ = {};
+std::queue<std::pair<std::string,int>> mainData::siteQ = {};
 
 // Constructor
 mainData::mainData(int maxThreads_input, int maxDepth_input, std::vector<std::string> initialWork_vecStr) {
@@ -43,8 +38,6 @@ mainData::mainData(int maxThreads_input, int maxDepth_input, std::vector<std::st
 	instanceExists = true;
 	maxThreads_int = maxThreads_input;
 	maxDepth = maxDepth_input;
-
-	currentThreads_vec.reserve(maxThreads_int);
 
 	loadFromDB();
 
@@ -58,8 +51,8 @@ mainData::mainData(int maxThreads_input, int maxDepth_input, std::vector<std::st
 		possibleSite(i,0);
 	}
 
-	site_thread = std::thread(&mainData::siteThread_main, this);
-	word_thread = std::thread(&mainData::wordThread_main, this);
+	site_thread = std::thread(&mainData::siteThread_main);
+	word_thread = std::thread(&mainData::wordThread_main);
 
 }
 
@@ -86,109 +79,78 @@ void mainData::possibleSite(std::string site_str, int depth_int) {
 	// probably a valid site
 	if(site_str.length() > 8 && site_str.substr(0,8) == "https://" && (!util::containsAny(site_str, ";#%"))) {
 		util::qPrint("Possible site called for:",site_str);
-		if(siteLock) {
-			siteLockQ.push(std::pair(site_str,depth_int));
-		} else {
-			siteQ.push(std::pair(site_str,depth_int));
-		}
+
+		site_mutex.lock();
+		siteQ.push(std::pair(site_str,depth_int));
+		site_mutex.unlock();
+
 	}
 
 }
 
 void mainData::addToWordList(std::string word_str) {
 	util::toLowercase(word_str);
-	if(wordLock) {
-		wordLock_que.push(word_str);
-	} else {
-		word_que.push(word_str);
-	}
+
+	word_mutex.lock();
+	wordQ.push(word_str);
+	word_mutex.unlock();
 }
 
-void mainData::stopCheck() {
+void mainData::mainLoop() {
 // recursive calls go on the stack but this avoids it
-lblStopCheckStart:
+lbl_StopCheckStart:
 	if(WTStopped && STStopped) {
 		stopCalled = true;
 		return;
 	}
-	goto lblStopCheckStart;
+	goto lbl_StopCheckStart;
 }
 
 void mainData::siteThread_main() {
 	int iStopCount = 0;
+	std::vector<std::thread> workThreads;
+
+	for(int i = 0; i < maxThreads_int; ++i) {
+		workThreads.push_back(std::thread(&mainData::workThread));
+	}
 
 // recursive calls go on the stack but this avoids it
+// and workThreads stays within scope
 lbl_siteThreadStart:
-	if(stopCalled) {
+	if(stopCalled || iStopCount > checkCount) {
 		STStopped = true;
-		return;
-	}
-
-	if(iStopCount > checkCount) {
-		STStopped = true;
-		return;
-	}
-
-	if(thread_set.size() < maxThreads_int) {
-		siteLock = true;
-		if(siteQ.size() > 0
-		&& (!completedSites_uset.contains(siteQ.front().first))
-		&& (!curSites_uset.contains(siteQ.front().first))) {
-			iStopCount = 0;
-			auto newThread = std::thread(&mainData::newSiteThread,*this,siteQ.front().first,siteQ.front().second);
-			thread_set.emplace(newThread.get_id());
-			siteQ.pop();
+		for(auto& t : workThreads) {
+			if(t.joinable()) {
+				t.join();
+			}
 		}
-		siteLock = false;
+		return;
 	}
 
-	while(siteLockQ.size() > 0) {
-		siteLockQ.push(siteLockQ.front());
-		siteLockQ.pop();
-	}
-
-	sleep(1);
+	util::sleep(0.25);
 	++iStopCount;
 	goto lbl_siteThreadStart;
 
 }
 
 void mainData::wordThread_main() {
-	int iStopCounter = 0;
-
 // recursive calls go on the stack but this avoids it
 lbl_wordThreadStart:
-	if(stopCalled) {
+	word_mutex.lock();
+	while(wordQ.size() > 0) {
+		util::unordered_mapIncrement(wordList_map, wordQ.front());
+		wordQ.pop();
+	}
+	word_mutex.unlock();
+
+	if(STStopped) {
 		WTStopped = true;
 		return;
+	} else {
+		util::sleep(0.25);
+		goto lbl_wordThreadStart;
 	}
-
-	if(iStopCounter > checkCount) {
-		WTStopped = true;
-		return;
-	}
-
-	wordLock = true;
-	while(word_que.size() > 0) {
-		iStopCounter = 0;
-		util::unordered_mapIncrement(wordList_map, word_que.front());
-		// util::qPrint(word_que.front());
-		word_que.pop();
-	}
-
-	wordLock = false;
 	
-	while(wordLock_que.size() > 0) {
-		iStopCounter = 0;
-		word_que.push(wordLock_que.front());
-		wordLock_que.pop();
-	}
-
-	// adds to stack and causes overflow, so goto
-	// wordThread_main();
-	sleep(1);
-	++iStopCounter;
-	goto lbl_wordThreadStart;
 }
 
 void mainData::joinAllThreads() {
@@ -206,7 +168,7 @@ size_t mainData::curlWriteFunc(char* ptr, size_t size, size_t nmemb, std::string
 	return dataSize;
 }
 
-void mainData::parseSite(std::string& page_str, int& depth_int) {
+void mainData::parseSite(std::string& page_str, const int depth_int) {
 	std::unordered_map<std::string,int> mElementCounter;
 	std::string sBuild = "";
 	bool
@@ -255,7 +217,6 @@ void mainData::parseSite(std::string& page_str, int& depth_int) {
 					sBuild.push_back(c);
 				}
 			} else if(workingHref) {
-				// TODO: verify this section works
 				if(c == ' ' || c == '>') {
 					possibleSite(sBuild,depth_int + 1);
 					sBuild.clear();
@@ -302,50 +263,75 @@ void mainData::parseSite(std::string& page_str, int& depth_int) {
 
 }
 
-void mainData::newSiteThread(mainData& parent_ref, std::string site, int depth_int) {
-	if(parent_ref.completedSites_uset.contains(site) || parent_ref.curSites_uset.contains(site)) {
+void mainData::workThread() {
+	std::pair<std::string,int> workingData;
+
+// recursive call adds to stack this avoids it
+lbl_WorkThread:
+	util::sleep(0.25);
+	if(STStopped) {
 		return;
 	}
 
-	parent_ref.curSites_uset.emplace(site);
-	
+	site_mutex.lock();
+	if(siteQ.size() > 0) {
+		workingData = siteQ.front();
+		siteQ.pop();
+	} else {
+		site_mutex.unlock();
+		goto lbl_WorkThread;
+	}
+	site_mutex.unlock();
+
+	thread_mutex.lock();
+	if(completedSites_uset.contains(workingData.first) || curSites_uset.contains(workingData.first)) {
+		thread_mutex.unlock();
+		goto lbl_WorkThread;
+	}
+	curSites_uset.emplace(workingData.first);
+	thread_mutex.unlock();
+
 	CURL* curl = curl_easy_init();
 	
 	if(!curl) {
-		util::cPrint("red","ERROR! Failed to create curl easy init on thread",std::this_thread::get_id(),"with site",site);
+		util::cPrint("red","ERROR! Failed to create curl easy init on thread",std::this_thread::get_id(),"with site",workingData.first);
 
-		parent_ref.curSites_uset.erase(site);
-		parent_ref.completedSites_uset.emplace(site);
-		parent_ref.thread_set.erase(std::this_thread::get_id());
+		thread_mutex.lock();
+		curSites_uset.erase(workingData.first);
+		completedSites_uset.emplace(workingData.first);
+		thread_mutex.unlock();
 
-		return;
+		goto lbl_WorkThread;
 	}
 
 	std::string page_str = "";
 
-	curl_easy_setopt(curl, CURLOPT_URL, site.c_str());
+	curl_easy_setopt(curl, CURLOPT_URL, workingData.first.c_str());
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteFunc);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &page_str);
 
 	CURLcode res = curl_easy_perform(curl);
 	if(res != CURLE_OK) {
-		util::cPrint("red","ERROR! Failed to curl easy perform on thread",std::this_thread::get_id(),"with site",site);
+		util::cPrint("red","ERROR! Failed to curl easy perform on thread",std::this_thread::get_id(),"with site",workingData.first);
 	
-		parent_ref.curSites_uset.erase(site);
-		parent_ref.completedSites_uset.emplace(site);
-		parent_ref.thread_set.erase(std::this_thread::get_id());
+		thread_mutex.lock();
+		curSites_uset.erase(workingData.first);
+		completedSites_uset.emplace(workingData.first);
+		thread_mutex.unlock();
 	}
 
-	util::cPrint("cyan","Attempting to parse site:",site," with a depth value of:",depth_int);
-	parseSite(page_str,depth_int);
-	util::cPrint("green","Finished parsing site:",site);
+	util::cPrint("cyan","Attempting to parse site:",workingData.first," with a depth value of:",workingData.second);
+	parseSite(page_str,workingData.second);
+	util::cPrint("green","Finished parsing site:",workingData.first);
 
-	parent_ref.curSites_uset.erase(site);
-	parent_ref.completedSites_uset.emplace(site);
-	parent_ref.thread_set.erase(std::this_thread::get_id());
-	
+	thread_mutex.lock();
+	curSites_uset.erase(workingData.first);
+	completedSites_uset.emplace(workingData.first);
+	thread_mutex.unlock();
 
 	curl_easy_cleanup(curl);
+
+	goto lbl_WorkThread;
 
 }
 

@@ -14,9 +14,6 @@ int main(int argc, char* argv[] ) {
 	util::cPrint("blue","Dictionary Builder.");
 	auto MD = mainData(8,1,initialSites);
 	
-	while(!MD.stopCalled) {
-		MD.stopCheck();
-	}
-
+	MD.mainLoop();
 
 }

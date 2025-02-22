@@ -1,7 +1,7 @@
 #pragma once
 
+#include <mutex>
 #include <queue>
-#include <set>
 #include <thread>
 #include <vector>
 #include <string>
@@ -17,22 +17,25 @@ public:
 
 	// int is count
 	static std::unordered_map<std::string, int> wordList_map;
+
 	int writeBatchSize = 8;
 	int maxDepth = 3;
 	static bool stopCalled;
 
-	void stopCheck();
+	// Will return when finished
+	// TODO: make a while loop for status ui later
+	void mainLoop();
 
 	void
 		possibleSite(std::string site_str, int depth_int),
 		addToWordList(std::string word_str);
 
 private:
+	std::mutex site_mutex, word_mutex, thread_mutex;
+
 	bool
 		WTStopped = false,
-		STStopped = false,
-		siteLock = false,
-		wordLock = false;
+		STStopped = false;
 	int maxThreads_int = 4;
 
 	// used for stop check counters
@@ -45,21 +48,19 @@ private:
 		completedSites_uset,
 		curSites_uset;
 
-	static std::unordered_set<std::thread::id> thread_set;
-	static std::queue<std::string> word_que, wordLock_que;
-	static std::queue<std::pair<std::string,int>> siteQ, siteLockQ;
+	static std::queue<std::string> wordQ;
+	static std::queue<std::pair<std::string,int>> siteQ;
 	
 	//bool says if available
 	static std::vector<std::pair<bool,std::thread>> currentThreads_vec;
 
 	std::thread
-		stop_thread,
 		site_thread,
 		word_thread;
 
 	void
-		parseSite(std::string& page_str, int& depth_int),
-		newSiteThread(mainData& parent_ref, std::string site, int depth_int),
+		parseSite(std::string& page_str, const int depth_int),
+		workThread(),
 		siteThread_main(),
 		wordThread_main(),
 		joinAllThreads(),
