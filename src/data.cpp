@@ -51,8 +51,8 @@ mainData::mainData(int maxThreads_input, int maxDepth_input, std::vector<std::st
 		possibleSite(i,0);
 	}
 
-	site_thread = std::thread(&mainData::siteThread_main);
-	word_thread = std::thread(&mainData::wordThread_main);
+	site_thread = std::thread(&mainData::siteThread_main,this);
+	word_thread = std::thread(&mainData::wordThread_main,this);
 
 }
 
@@ -111,7 +111,7 @@ void mainData::siteThread_main() {
 	std::vector<std::thread> workThreads;
 
 	for(int i = 0; i < maxThreads_int; ++i) {
-		workThreads.push_back(std::thread(&mainData::workThread));
+		workThreads.push_back(std::thread(&mainData::workThread,this));
 	}
 
 // recursive calls go on the stack but this avoids it
@@ -128,7 +128,15 @@ lbl_siteThreadStart:
 	}
 
 	util::sleep(0.25);
-	++iStopCount;
+
+	site_mutex.lock();
+	if(siteQ.size() > 0) {
+		iStopCount = 0;
+	} else {
+		++iStopCount;
+	}
+	site_mutex.unlock();
+
 	goto lbl_siteThreadStart;
 
 }
@@ -240,7 +248,7 @@ void mainData::parseSite(std::string& page_str, const int depth_int) {
 			determingElement = true;
 			ignoreCurrent = false;
 			if(sBuild.length() > 0) {
-				if(util::onlyContains(sBuild,"'",true)
+				if(util::onlyContains(sBuild,"",true)
 				&& (sBuild.length() > 1)
 				&& (!util::onlyContains(sBuild,"ABCDEFGHIJKLMNOPQRSTUVWXYZ"))) {
 					addToWordList(sBuild);

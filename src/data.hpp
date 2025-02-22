@@ -39,7 +39,7 @@ private:
 	int maxThreads_int = 4;
 
 	// used for stop check counters
-	int checkCount = 1;
+	int checkCount = 4;
 
 	// TODO: verify location
 	std::string dbFile_str = "dict.db";

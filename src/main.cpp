@@ -12,7 +12,7 @@ std::vector<std::string> initialSites = {
 int main(int argc, char* argv[] ) {
 
 	util::cPrint("blue","Dictionary Builder.");
-	auto MD = mainData(8,1,initialSites);
+	auto MD = mainData(8,2,initialSites);
 	
 	MD.mainLoop();
 

@@ -13,14 +13,12 @@ else
 	cd $buildDir || exit 1
 fi
 
-cmake --build .
-
-if [ $? -ne 0 ]; then
+if ! cmake --build .; then
 	echo "Build error."
 	exit 1
 fi
 
-if [ $# -gt 0 ] && [ $1 = "run" ]; then
+if [ $# -gt 0 ] && [ "$1" = "run" ]; then
 	echo "Build complete. Attempting to run $programExec"
 	echo "--- $programExec ---"
 
